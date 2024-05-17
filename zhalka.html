@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <style>
+            html, body {
+              height: 100%;
+              margin: 0;
+              padding: 0;
+            }
+            .fullscreen-div {
+              position: absolute;
+              width: 100vw;
+              height: 100vh;
+              top: 0;
+              left: 0;
+            }
+            .overlay-content {
+              /* text-align: center; */
+              position: relative;
+              width: min-content;
+            }
+
+            .overlay-lighten {
+              opacity: 0.3;
+            }
+              
+            .overlay-darken {
+              filter: brightness(80%);
+            }
+
+            .overlay-text {
+              position: absolute;
+              top: 50%;
+              left: 50%;
+              transform: translate(-50%, -50%);
+            }
+        </style>
+        <script type="module">
+          function toggleFullScreen() {
+            if (!document.fullscreenElement) {
+              document.documentElement.requestFullscreen();
+            } else if (document.exitFullscreen) {
+              document.exitFullscreen();
+            }
+          }
+
+          document.addEventListener("DOMContentLoaded", function(event) { 
+              let wasmInstance;
+              let image;
+              let prevTs = 0;
+
+              const canvas = document.getElementById("game");
+              let context;
+
+              function update(ts) {
+                const dt = (ts - prevTs) / 1000;
+                prevTs = ts;
+                wasmInstance.update(dt);
+                context.putImageData(image, 0, 0);
+                requestAnimationFrame(update);
+              }
+
+              async function init() {
+                function tostring(offset) {
+                    let ret = "";
+                    const buffer = new Uint8Array(wasmInstance.memory.buffer);
+                    while (buffer[offset] != 0) {
+                        ret += String.fromCharCode(buffer[offset]);
+                        offset += 1;
+                    }
+                    return ret;
+                }
+                const importObject = {
+                  env: {
+                    printn: function (ptr, value) {
+                        console.log(tostring(ptr) + ": ", value)
+                    },
+                    printnn: function (ptr, a, b) {
+                        console.log(tostring(ptr) + ": ", a, b)
+                    }
+                  }
+                };
+
+                const { instance } = await WebAssembly.instantiateStreaming(
+                  fetch("./zhalka.wasm"),
+                  importObject
+                );
+
+                wasmInstance = instance.exports;
+                wasmInstance.__wasm_call_ctors();
+                wasmInstance.init();
+
+                let resizeObserver = new ResizeObserver((entries) => {
+                    let canvas = entries[0];
+                    let width = Math.floor(canvas.contentRect.width);
+                    let height = Math.floor(canvas.contentRect.height);
+                    const size = 4 * width * height;
+
+                    canvas.target.width = width;
+                    canvas.target.height = height;
+
+                    if (wasmInstance.memory.buffer.byteLength < wasmInstance.GetCanvas() + size) {
+                        const PAGESIZE = 64 * 1024;
+                        let addPages = Math.floor((wasmInstance.GetCanvas() + size - wasmInstance.memory.buffer.byteLength + PAGESIZE - 1) / PAGESIZE);
+                        wasmInstance.memory.grow(addPages + 20);
+                    }
+
+                    let canvasOffset = wasmInstance.setSize(width, height);
+                    console.log("canvasOffset: ", canvasOffset);
+                    image = new ImageData(new Uint8ClampedArray(wasmInstance.memory.buffer, canvasOffset, size), width);
+                    console.log("set image to ", width, height);
+                    context = canvas.target.getContext("2d");
+                    requestAnimationFrame(update);
+                });
+
+                resizeObserver.observe(canvas);
+
+                const keyToCode = {
+                    "p": 1,
+                    "ArrowLeft": 2,
+                    "ArrowRight": 3,
+                    "ArrowUp": 4,
+                    "ArrowDown": 5,
+                    " ": 6
+                };
+                document.addEventListener(
+                  "keydown",
+                  (event) => {
+                    if (event.key == 'f') {
+                      toggleFullScreen();
+                    }
+                    wasmInstance.KeyDown(keyToCode[event.key]);
+                  }
+                );
+
+                document.addEventListener(
+                  "keyup",
+                  (event) => {
+                    wasmInstance.KeyUp(keyToCode[event.key]);
+                  }
+                );
+
+                canvas.addEventListener(
+                    "mousedown", (event) => {
+                        wasmInstance.MouseDown(event.clientX, event.clientY);
+                    }
+                );
+                canvas.addEventListener(
+                    "mouseup", (event) => {
+                        wasmInstance.MouseUp(event.clientX, event.clientY);
+                    }
+                );
+                canvas.addEventListener(
+                    "mousemove", (event) => {
+                        wasmInstance.MouseMove(event.clientX, event.clientY);
+                    }
+                );
+              }
+
+              init();
+          });
+        </script>
+    </head>
+    <body>
+        <canvas class="fullscreen-div" id="game"></canvas>
+    </body>
+</html>
